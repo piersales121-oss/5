@@ -1,0 +1,6 @@
+{
+  "name": "EduZoon",
+  "description": "EduZoon – AI শিক্ষা সহায়ক অ্যাপ। Google Sheets লগইন, ৫০+ AI এডুকেশনাল টুলস, Gemini AI চ্যাটবট এবং গ্লাস মোরফিজম ডার্ক UI।",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
