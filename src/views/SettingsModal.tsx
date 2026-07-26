@@ -20,6 +20,7 @@ interface SettingsModalProps {
   onClose: () => void;
   darkMode: boolean;
   onToggleDarkMode: () => void;
+  onOpenInstalledView?: () => void;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
@@ -27,6 +28,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   onClose,
   darkMode,
   onToggleDarkMode,
+  onOpenInstalledView,
 }) => {
   if (!isOpen) return null;
 
@@ -144,6 +146,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
           <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
         </div>
+
+        {/* Installed Android Mode Button */}
+        {onOpenInstalledView && (
+          <button
+            onClick={() => {
+              onClose();
+              onOpenInstalledView();
+            }}
+            className="w-full py-2.5 px-3 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-slate-950 font-bold text-xs rounded-xl flex items-center justify-center gap-2 shadow-lg transition-all"
+          >
+            <span>📱</span>
+            <span>ইনস্টলড অ্যান্ড্রয়েড মোড (Hello Android)</span>
+          </button>
+        )}
 
         {/* Cache & Backup Actions */}
         <div className="grid grid-cols-2 gap-2 pt-2">

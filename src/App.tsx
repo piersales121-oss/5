@@ -10,6 +10,7 @@ import { ToolExecutionModal } from './components/ToolExecutionModal';
 import { AuthModal } from './components/AuthModal';
 import { StudyTimerModal } from './components/StudyTimerModal';
 import { SettingsModal } from './views/SettingsModal';
+import { InstalledAndroidView } from './views/InstalledAndroidView';
 import { AI_TOOLS_DATA } from './data/toolsData';
 import { UserProfile } from './types';
 import { getCurrentUser, logoutUser, updateProfile } from './services/authService';
@@ -19,6 +20,20 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('home');
   const [darkMode, setDarkMode] = useState(true);
   const [user, setUser] = useState<UserProfile | null>(getCurrentUser());
+
+  // Installed App Mode (shows 'Hello Android' when standalone/installed or requested)
+  const [isInstalledView, setIsInstalledView] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const isStandalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        (window.navigator as any).standalone === true ||
+        window.location.search.includes('installed=true') ||
+        window.location.search.includes('android=true');
+      const stored = localStorage.getItem('eduzoon_force_installed_view');
+      return isStandalone || stored === 'true';
+    }
+    return false;
+  });
 
   // Modals
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
@@ -58,6 +73,18 @@ export default function App() {
     setUser(null);
     setIsProfileOpen(false);
   };
+
+  // If launched in installed mode or forced installed view
+  if (isInstalledView) {
+    return (
+      <InstalledAndroidView
+        onReturnToWeb={() => {
+          localStorage.setItem('eduzoon_force_installed_view', 'false');
+          setIsInstalledView(false);
+        }}
+      />
+    );
+  }
 
   // If not logged in, show mandatory login screen overlay
   if (!user) {
@@ -145,6 +172,10 @@ export default function App() {
         onClose={() => setIsSettingsOpen(false)}
         darkMode={darkMode}
         onToggleDarkMode={() => setDarkMode(!darkMode)}
+        onOpenInstalledView={() => {
+          localStorage.setItem('eduzoon_force_installed_view', 'true');
+          setIsInstalledView(true);
+        }}
       />
 
       {/* User Profile Drawer Modal */}

@@ -40,7 +40,13 @@ import {
   Trash2, 
   CheckSquare, 
   Square,
-  BadgeCheck
+  BadgeCheck,
+  Film,
+  Download,
+  Volume2,
+  Play,
+  Pause,
+  Navigation
 } from 'lucide-react';
 import { UserProfile, UserChatMessage, ChatGroup } from '../types';
 import { getCurrentUser, getStoredUsers } from '../services/authService';
@@ -189,6 +195,33 @@ export const UserChatView: React.FC = () => {
     });
   };
 
+  // Media Attachment State
+  const [pendingAttachment, setPendingAttachment] = useState<{
+    mediaType: 'image' | 'video' | 'audio' | 'document' | 'location';
+    mediaUrl: string;
+    fileName?: string;
+    fileSize?: string;
+  } | null>(null);
+
+  // Fullscreen media preview modal
+  const [previewMediaUrl, setPreviewMediaUrl] = useState<string | null>(null);
+
+  // File Input Refs
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const videoInputRef = useRef<HTMLInputElement>(null);
+  const documentInputRef = useRef<HTMLInputElement>(null);
+  const audioInputRef = useRef<HTMLInputElement>(null);
+
+  // Voice Recording States & Refs
+  const [isRecordingVoice, setIsRecordingVoice] = useState(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<any>(null);
+
+  // Sending lock ref to prevent duplicate sends on Enter / Form submit
+  const isSendingRef = useRef(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Initial Sync & Realtime Broadcast setup
@@ -202,8 +235,11 @@ export const UserChatView: React.FC = () => {
     try {
       channel = new BroadcastChannel('zoonchat_broadcast');
       channel.onmessage = (e) => {
-        if (e.data?.type === 'NEW_MESSAGE') {
-          setMessages((prev) => [...prev, e.data.message]);
+        if (e.data?.type === 'NEW_MESSAGE' && e.data?.message) {
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === e.data.message.id)) return prev;
+            return [...prev, e.data.message];
+          });
         } else if (e.data?.type === 'NEW_GROUP') {
           setGroups((prev) => [e.data.group, ...prev]);
         } else if (e.data?.type === 'UPDATE_GROUP') {
@@ -218,7 +254,15 @@ export const UserChatView: React.FC = () => {
 
     const handleStorage = (e: StorageEvent) => {
       if (e.key === USER_MESSAGES_KEY && e.newValue) {
-        try { setMessages(JSON.parse(e.newValue)); } catch {}
+        try {
+          const parsed: UserChatMessage[] = JSON.parse(e.newValue);
+          setMessages((prev) => {
+            const map = new Map<string, UserChatMessage>();
+            prev.forEach((m) => map.set(m.id, m));
+            parsed.forEach((m) => map.set(m.id, m));
+            return Array.from(map.values()).sort((a, b) => (a.createdAtMs || 0) - (b.createdAtMs || 0));
+          });
+        } catch {}
       }
       if (e.key === CHAT_GROUPS_KEY && e.newValue) {
         try { setGroups(JSON.parse(e.newValue)); } catch {}
@@ -240,6 +284,7 @@ export const UserChatView: React.FC = () => {
     return () => {
       window.removeEventListener('storage', handleStorage);
       if (channel) channel.close();
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
     };
   }, []);
 
@@ -296,7 +341,9 @@ export const UserChatView: React.FC = () => {
       const channel = new BroadcastChannel('zoonchat_broadcast');
       channel.postMessage({ type: 'NEW_MESSAGE', message: newMsg });
       channel.close();
-    } catch {}
+    } catch (err) {
+      console.error('Failed to save/broadcast message:', err);
+    }
   };
 
   const saveAndBroadcastGroup = (newGroup: ChatGroup) => {
@@ -333,13 +380,219 @@ export const UserChatView: React.FC = () => {
     setViewMode({ type: 'dashboard' });
   };
 
-  const handleSendMessage = (textToSend?: string) => {
-    const content = textToSend || inputMsg;
-    if (!content.trim() || !currentUser || viewMode.type !== 'chat') return;
+  // Helper file handlers
+  const compressAndSelectImage = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        const maxDim = 1200;
+        if (width > maxDim || height > maxDim) {
+          if (width > height) {
+            height = Math.round((height * maxDim) / width);
+            width = maxDim;
+          } else {
+            width = Math.round((width * maxDim) / height);
+            height = maxDim;
+          }
+        }
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.82);
+          setPendingAttachment({
+            mediaType: 'image',
+            mediaUrl: dataUrl,
+            fileName: file.name,
+            fileSize: `${(file.size / 1024).toFixed(0)} KB`,
+          });
+          setShowAttachmentMenu(false);
+        }
+      };
+      img.src = e.target?.result as string;
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleImageSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) compressAndSelectImage(file);
+    e.target.value = '';
+  };
+
+  const handleVideoSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 15 * 1024 * 1024) {
+      alert('ভিডিও ক্লিপটি ১৫ মেগাবাইটের মধ্যে হতে হবে।');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setPendingAttachment({
+        mediaType: 'video',
+        mediaUrl: ev.target?.result as string,
+        fileName: file.name,
+        fileSize: `${(file.size / (1024 * 1024)).toFixed(1)} MB`,
+      });
+      setShowAttachmentMenu(false);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const handleDocumentSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      alert('ফাইলটি ১০ মেগাবাইটের মধ্যে হতে হবে।');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setPendingAttachment({
+        mediaType: 'document',
+        mediaUrl: ev.target?.result as string,
+        fileName: file.name,
+        fileSize: file.size > 1024 * 1024 ? `${(file.size / (1024 * 1024)).toFixed(1)} MB` : `${(file.size / 1024).toFixed(0)} KB`,
+      });
+      setShowAttachmentMenu(false);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  const handleAudioSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      setPendingAttachment({
+        mediaType: 'audio',
+        mediaUrl: ev.target?.result as string,
+        fileName: file.name,
+        fileSize: `${(file.size / 1024).toFixed(0)} KB`,
+      });
+      setShowAttachmentMenu(false);
+    };
+    reader.readAsDataURL(file);
+    e.target.value = '';
+  };
+
+  // Voice recording
+  const startVoiceRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      audioChunksRef.current = [];
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64Audio = reader.result as string;
+          handleSendMessage('🎤 ভয়েস নোট', {
+            mediaType: 'audio',
+            mediaUrl: base64Audio,
+            fileName: 'Voice_Note.webm',
+            fileSize: `${(audioBlob.size / 1024).toFixed(0)} KB`,
+          });
+        };
+        reader.readAsDataURL(audioBlob);
+        stream.getTracks().forEach((track) => track.stop());
+      };
+
+      mediaRecorder.start();
+      setIsRecordingVoice(true);
+      setRecordingSeconds(0);
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingSeconds((prev) => prev + 1);
+      }, 1000);
+    } catch (err) {
+      alert('মাইক্রোফোন অ্যাক্সেস করতে সমস্যা হয়েছে।');
+    }
+  };
+
+  const stopAndSendVoiceRecording = () => {
+    if (mediaRecorderRef.current && isRecordingVoice) {
+      mediaRecorderRef.current.stop();
+      setIsRecordingVoice(false);
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    }
+  };
+
+  const cancelVoiceRecording = () => {
+    if (mediaRecorderRef.current && isRecordingVoice) {
+      mediaRecorderRef.current.onstop = null;
+      mediaRecorderRef.current.stop();
+      setIsRecordingVoice(false);
+      if (recordingTimerRef.current) clearInterval(recordingTimerRef.current);
+    }
+  };
+
+  // Share GPS Location
+  const handleShareLocation = () => {
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => {
+          const lat = pos.coords.latitude.toFixed(6);
+          const lng = pos.coords.longitude.toFixed(6);
+          const mapUrl = `https://www.google.com/maps?q=${lat},${lng}`;
+          setPendingAttachment({
+            mediaType: 'location',
+            mediaUrl: mapUrl,
+            fileName: `Location: ${lat}, ${lng}`,
+          });
+          setShowAttachmentMenu(false);
+        },
+        () => {
+          const mapUrl = `https://www.google.com/maps?q=23.8103,90.4125`;
+          setPendingAttachment({
+            mediaType: 'location',
+            mediaUrl: mapUrl,
+            fileName: 'Location: Dhaka, Bangladesh',
+          });
+          setShowAttachmentMenu(false);
+        }
+      );
+    } else {
+      alert('আপনার ডিভাইসে জিওলোকেশন সার্ভিস পাওয়া যায়নি।');
+    }
+  };
+
+  const handleSendMessage = (
+    textToSend?: string,
+    directAttachment?: {
+      mediaType: 'image' | 'video' | 'audio' | 'document' | 'location';
+      mediaUrl: string;
+      fileName?: string;
+      fileSize?: string;
+    }
+  ) => {
+    if (isSendingRef.current) return;
+
+    const content = textToSend !== undefined ? textToSend : inputMsg;
+    const activeAttachment = directAttachment || pendingAttachment;
+
+    if ((!content.trim() && !activeAttachment) || !currentUser || viewMode.type !== 'chat') return;
+
+    isSendingRef.current = true;
 
     const now = new Date();
     const timestamp = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const createdAtMs = now.getTime();
+    const createdAtMs = Date.now() + Math.floor(Math.random() * 1000);
     const target = viewMode.target;
 
     let newMsg: UserChatMessage = {
@@ -351,21 +604,35 @@ export const UserChatView: React.FC = () => {
       createdAtMs,
     };
 
+    if (activeAttachment) {
+      newMsg.mediaType = activeAttachment.mediaType;
+      newMsg.mediaUrl = activeAttachment.mediaUrl;
+      newMsg.fileName = activeAttachment.fileName;
+      newMsg.fileSize = activeAttachment.fileSize;
+    }
+
     if (target.kind === 'direct') {
       newMsg.receiverUsername = target.user.username;
     } else if (target.kind === 'group') {
       newMsg.groupId = target.group.id;
     }
 
-    const updated = [...messages, newMsg];
-    saveAndBroadcastMsg(updated, newMsg);
-    
-    // Automatically mark self-sent message as read
+    setMessages((prev) => {
+      const updated = [...prev, newMsg];
+      saveAndBroadcastMsg(updated, newMsg);
+      return updated;
+    });
+
     markMessagesAsRead([newMsg.id]);
 
     setInputMsg('');
+    setPendingAttachment(null);
     setShowAttachmentMenu(false);
     setShowEmojiPicker(false);
+
+    setTimeout(() => {
+      isSendingRef.current = false;
+    }, 250);
   };
 
   const handleReaction = (msgId: string, emoji: string) => {
@@ -757,7 +1024,79 @@ export const UserChatView: React.FC = () => {
                           : 'bg-slate-900/90 border border-slate-800 text-slate-100 rounded-bl-xs backdrop-blur-md'
                       }`}
                     >
-                      <p className="whitespace-pre-wrap">{msg.text}</p>
+                      {/* IMAGE ATTACHMENT */}
+                      {msg.mediaType === 'image' && msg.mediaUrl && (
+                        <div className="mb-2 cursor-pointer overflow-hidden rounded-xl border border-slate-700/60 bg-black/40">
+                          <img
+                            src={msg.mediaUrl}
+                            alt="photo attachment"
+                            className="max-h-64 w-full rounded-xl object-cover hover:opacity-90 transition-opacity"
+                            onClick={() => setPreviewMediaUrl(msg.mediaUrl!)}
+                          />
+                        </div>
+                      )}
+
+                      {/* VIDEO ATTACHMENT */}
+                      {msg.mediaType === 'video' && msg.mediaUrl && (
+                        <div className="mb-2 overflow-hidden rounded-xl border border-slate-700/60 bg-black">
+                          <video src={msg.mediaUrl} controls className="max-h-64 w-full rounded-xl" />
+                        </div>
+                      )}
+
+                      {/* AUDIO / VOICE ATTACHMENT */}
+                      {msg.mediaType === 'audio' && msg.mediaUrl && (
+                        <div className="mb-2 p-2 bg-slate-950/80 rounded-2xl border border-slate-800/80 flex flex-col gap-1 min-w-[200px]">
+                          <div className="flex items-center gap-1.5 text-emerald-400 font-bold text-[11px]">
+                            <Volume2 className="w-4 h-4 animate-pulse" />
+                            <span>{msg.fileName || 'ভয়েস বার্তা'}</span>
+                          </div>
+                          <audio src={msg.mediaUrl} controls className="w-full h-8" />
+                        </div>
+                      )}
+
+                      {/* DOCUMENT ATTACHMENT */}
+                      {msg.mediaType === 'document' && msg.mediaUrl && (
+                        <div className="mb-2 p-2.5 bg-slate-950/80 rounded-2xl border border-slate-800/80 flex items-center justify-between gap-3 min-w-[210px]">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="p-2 rounded-xl bg-blue-500/20 text-blue-400 border border-blue-500/30 shrink-0">
+                              <FileText className="w-5 h-5" />
+                            </div>
+                            <div className="min-w-0 text-left">
+                              <p className="text-xs font-bold text-slate-100 truncate">{msg.fileName || 'Document'}</p>
+                              <p className="text-[9px] text-slate-400">{msg.fileSize || 'File'}</p>
+                            </div>
+                          </div>
+                          <a
+                            href={msg.mediaUrl}
+                            download={msg.fileName || 'document_file'}
+                            className="p-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white shrink-0 transition-colors shadow-md"
+                            title="ডাউনলোড করুন"
+                          >
+                            <Download className="w-4 h-4" />
+                          </a>
+                        </div>
+                      )}
+
+                      {/* LOCATION ATTACHMENT */}
+                      {msg.mediaType === 'location' && msg.mediaUrl && (
+                        <div className="mb-2 p-2.5 bg-slate-950/80 rounded-2xl border border-slate-800/80 flex flex-col gap-1.5 min-w-[200px]">
+                          <div className="flex items-center gap-2 text-amber-400 font-bold text-xs">
+                            <MapPin className="w-4 h-4 fill-amber-500/20" />
+                            <span>{msg.fileName || 'Shared Location'}</span>
+                          </div>
+                          <a
+                            href={msg.mediaUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors"
+                          >
+                            <Navigation className="w-3.5 h-3.5" />
+                            <span>গুগল ম্যাপসে খুলুন</span>
+                          </a>
+                        </div>
+                      )}
+
+                      {msg.text && <p className="whitespace-pre-wrap">{msg.text}</p>}
 
                       <div className="flex items-center justify-end gap-1 mt-1 text-[9px] opacity-80">
                         <span>{msg.timestamp}</span>
@@ -786,34 +1125,45 @@ export const UserChatView: React.FC = () => {
 
           {/* Attachment Drawer */}
           {showAttachmentMenu && (
-            <div className="bg-slate-900/95 border-t border-slate-800 p-3 grid grid-cols-4 gap-3 animate-in slide-in-from-bottom-5">
+            <div className="bg-slate-900/95 border-t border-slate-800 p-3 grid grid-cols-5 gap-2 animate-in slide-in-from-bottom-5">
               <button
-                onClick={() => handleSendMessage('📷 [Image attached]')}
+                onClick={() => imageInputRef.current?.click()}
                 className="flex flex-col items-center gap-1.5 p-2 bg-slate-950 rounded-2xl border border-slate-800 hover:border-blue-500 text-blue-400"
               >
                 <ImageIcon className="w-5 h-5" />
-                <span className="text-[10px] font-bold text-slate-300">Gallery</span>
+                <span className="text-[9px] font-bold text-slate-300">Photo</span>
               </button>
+
               <button
-                onClick={() => handleSendMessage('📄 [Document.pdf attached]')}
+                onClick={() => videoInputRef.current?.click()}
+                className="flex flex-col items-center gap-1.5 p-2 bg-slate-950 rounded-2xl border border-slate-800 hover:border-teal-500 text-teal-400"
+              >
+                <Film className="w-5 h-5" />
+                <span className="text-[9px] font-bold text-slate-300">Video</span>
+              </button>
+
+              <button
+                onClick={() => documentInputRef.current?.click()}
                 className="flex flex-col items-center gap-1.5 p-2 bg-slate-950 rounded-2xl border border-slate-800 hover:border-emerald-500 text-emerald-400"
               >
                 <FileText className="w-5 h-5" />
-                <span className="text-[10px] font-bold text-slate-300">Document</span>
+                <span className="text-[9px] font-bold text-slate-300">Document</span>
               </button>
+
               <button
-                onClick={() => handleSendMessage('📍 [Location shared]')}
+                onClick={() => audioInputRef.current?.click()}
+                className="flex flex-col items-center gap-1.5 p-2 bg-slate-950 rounded-2xl border border-slate-800 hover:border-purple-500 text-purple-400"
+              >
+                <Volume2 className="w-5 h-5" />
+                <span className="text-[9px] font-bold text-slate-300">Audio</span>
+              </button>
+
+              <button
+                onClick={handleShareLocation}
                 className="flex flex-col items-center gap-1.5 p-2 bg-slate-950 rounded-2xl border border-slate-800 hover:border-amber-500 text-amber-400"
               >
                 <MapPin className="w-5 h-5" />
-                <span className="text-[10px] font-bold text-slate-300">Location</span>
-              </button>
-              <button
-                onClick={() => handleSendMessage('👤 [Contact Card shared]')}
-                className="flex flex-col items-center gap-1.5 p-2 bg-slate-950 rounded-2xl border border-slate-800 hover:border-purple-500 text-purple-400"
-              >
-                <UserCheck className="w-5 h-5" />
-                <span className="text-[10px] font-bold text-slate-300">Contact</span>
+                <span className="text-[9px] font-bold text-slate-300">Location</span>
               </button>
             </div>
           )}
@@ -836,46 +1186,130 @@ export const UserChatView: React.FC = () => {
             </div>
           )}
 
-          {/* Input Bar */}
-          <div className="bg-slate-900 border-t border-slate-800/80 p-2.5 flex items-center gap-2">
-            <button
-              onClick={() => setShowAttachmentMenu(!showAttachmentMenu)}
-              className="p-2 rounded-full hover:bg-slate-800 text-slate-400 hover:text-blue-400 transition-colors"
-            >
-              <Paperclip className="w-4 h-4" />
-            </button>
+          {/* Pending Attachment Preview Bar */}
+          {pendingAttachment && (
+            <div className="bg-slate-950 border-t border-slate-800 p-2.5 flex items-center justify-between gap-2 animate-in slide-in-from-bottom-2">
+              <div className="flex items-center gap-2 min-w-0">
+                {pendingAttachment.mediaType === 'image' && (
+                  <img src={pendingAttachment.mediaUrl} alt="preview" className="w-10 h-10 rounded-lg object-cover border border-slate-700" />
+                )}
+                {pendingAttachment.mediaType === 'video' && (
+                  <div className="w-10 h-10 rounded-lg bg-teal-500/20 border border-teal-500/30 text-teal-400 flex items-center justify-center">
+                    <Film className="w-5 h-5" />
+                  </div>
+                )}
+                {pendingAttachment.mediaType === 'audio' && (
+                  <div className="w-10 h-10 rounded-lg bg-purple-500/20 border border-purple-500/30 text-purple-400 flex items-center justify-center">
+                    <Volume2 className="w-5 h-5" />
+                  </div>
+                )}
+                {pendingAttachment.mediaType === 'document' && (
+                  <div className="w-10 h-10 rounded-lg bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 flex items-center justify-center">
+                    <FileText className="w-5 h-5" />
+                  </div>
+                )}
+                {pendingAttachment.mediaType === 'location' && (
+                  <div className="w-10 h-10 rounded-lg bg-amber-500/20 border border-amber-500/30 text-amber-400 flex items-center justify-center">
+                    <MapPin className="w-5 h-5" />
+                  </div>
+                )}
 
-            <button
-              onClick={() => setShowEmojiPicker(!showEmojiPicker)}
-              className="p-2 rounded-full hover:bg-slate-800 text-slate-400 hover:text-amber-400 transition-colors"
-            >
-              <Smile className="w-4 h-4" />
-            </button>
+                <div className="min-w-0 text-left">
+                  <p className="text-xs font-bold text-white truncate">{pendingAttachment.fileName || 'সংযুক্ত মিডিয়া'}</p>
+                  <p className="text-[10px] text-emerald-400 font-semibold">{pendingAttachment.fileSize || 'রেডি টু সেন্ড'}</p>
+                </div>
+              </div>
 
-            <input
-              type="text"
-              value={inputMsg}
-              onChange={(e) => setInputMsg(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-              placeholder="মেসেজ লিখুন..."
-              className="flex-1 bg-slate-950 border border-slate-800 rounded-full px-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
-            />
+              <button
+                onClick={() => setPendingAttachment(null)}
+                className="p-1.5 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
 
-            <button
-              onClick={() => handleSendMessage('🎤 [Voice Note 0:08]')}
-              className="p-2 rounded-full hover:bg-slate-800 text-slate-400 hover:text-emerald-400 transition-colors"
-            >
-              <Mic className="w-4 h-4" />
-            </button>
+          {/* Hidden File Inputs for Attachments */}
+          <input type="file" ref={imageInputRef} accept="image/*" className="hidden" onChange={handleImageSelected} />
+          <input type="file" ref={videoInputRef} accept="video/*" className="hidden" onChange={handleVideoSelected} />
+          <input type="file" ref={documentInputRef} accept=".pdf,.doc,.docx,.txt,.zip,.rar,.ppt,.pptx,.xls,.xlsx,*" className="hidden" onChange={handleDocumentSelected} />
+          <input type="file" ref={audioInputRef} accept="audio/*" className="hidden" onChange={handleAudioSelected} />
 
-            <button
-              onClick={() => handleSendMessage()}
-              disabled={!inputMsg.trim()}
-              className="p-2.5 rounded-full bg-gradient-to-tr from-blue-600 to-emerald-500 text-white shadow-lg shadow-blue-500/30 hover:opacity-90 transition-all disabled:opacity-40"
-            >
-              <Send className="w-4 h-4" />
-            </button>
-          </div>
+          {/* Input Bar or Voice Recorder Bar */}
+          {isRecordingVoice ? (
+            <div className="bg-slate-900 border-t border-slate-800/80 p-2.5 flex items-center justify-between gap-3 animate-pulse">
+              <div className="flex items-center gap-2">
+                <span className="w-3 h-3 rounded-full bg-rose-500 animate-ping"></span>
+                <span className="text-xs font-bold text-rose-400">
+                  ভয়েস রেকর্ড হচ্ছে... {Math.floor(recordingSeconds / 60)}:{(recordingSeconds % 60).toString().padStart(2, '0')}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={cancelVoiceRecording}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold flex items-center gap-1"
+                >
+                  <X className="w-3.5 h-3.5" />
+                  <span>বাতিল</span>
+                </button>
+
+                <button
+                  onClick={stopAndSendVoiceRecording}
+                  className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 text-white text-xs font-bold flex items-center gap-1 shadow-md hover:opacity-90"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  <span>পাঠান</span>
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-slate-900 border-t border-slate-800/80 p-2.5 flex items-center gap-2">
+              <button
+                onClick={() => setShowAttachmentMenu(!showAttachmentMenu)}
+                className="p-2 rounded-full hover:bg-slate-800 text-slate-400 hover:text-blue-400 transition-colors"
+              >
+                <Paperclip className="w-4 h-4" />
+              </button>
+
+              <button
+                onClick={() => setShowEmojiPicker(!showEmojiPicker)}
+                className="p-2 rounded-full hover:bg-slate-800 text-slate-400 hover:text-amber-400 transition-colors"
+              >
+                <Smile className="w-4 h-4" />
+              </button>
+
+              <input
+                type="text"
+                value={inputMsg}
+                onChange={(e) => setInputMsg(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    handleSendMessage();
+                  }
+                }}
+                placeholder="মেসেজ লিখুন..."
+                className="flex-1 bg-slate-950 border border-slate-800 rounded-full px-4 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-blue-500"
+              />
+
+              <button
+                onClick={startVoiceRecording}
+                className="p-2 rounded-full hover:bg-slate-800 text-slate-400 hover:text-emerald-400 transition-colors"
+                title="ভয়েস রেকর্ড করুন"
+              >
+                <Mic className="w-4 h-4" />
+              </button>
+
+              <button
+                onClick={() => handleSendMessage()}
+                disabled={!inputMsg.trim() && !pendingAttachment}
+                className="p-2.5 rounded-full bg-gradient-to-tr from-blue-600 to-emerald-500 text-white shadow-lg shadow-blue-500/30 hover:opacity-90 transition-all disabled:opacity-40"
+              >
+                <Send className="w-4 h-4" />
+              </button>
+            </div>
+          )}
 
           {/* GROUP INFO & MEMBER MANAGEMENT MODAL */}
           {showGroupInfoModal && viewMode.target.kind === 'group' && (
@@ -1621,6 +2055,24 @@ export const UserChatView: React.FC = () => {
                 </span>
               </button>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Fullscreen Image Preview Modal */}
+      {previewMediaUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/90 backdrop-blur-md animate-in fade-in"
+          onClick={() => setPreviewMediaUrl(null)}
+        >
+          <div className="relative max-w-3xl max-h-[90vh] overflow-hidden rounded-2xl shadow-2xl border border-slate-800">
+            <button
+              onClick={() => setPreviewMediaUrl(null)}
+              className="absolute top-3 right-3 z-10 w-8 h-8 rounded-full bg-slate-900/80 text-white flex items-center justify-center hover:bg-slate-800"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <img src={previewMediaUrl} alt="preview full" className="max-h-[85vh] max-w-full object-contain" />
           </div>
         </div>
       )}

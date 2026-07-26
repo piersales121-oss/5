@@ -69,6 +69,12 @@ export interface UserChatMessage {
   createdAtMs?: number;
   receiverUsername?: string; // username for direct message
   groupId?: string; // if sending to a specific group
+  
+  // Media attachments
+  mediaType?: 'image' | 'video' | 'audio' | 'document' | 'location';
+  mediaUrl?: string; // Data URL / Base64 string
+  fileName?: string;
+  fileSize?: string;
 }
 
 export interface StudyNote {
