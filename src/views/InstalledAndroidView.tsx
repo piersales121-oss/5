@@ -30,27 +30,27 @@ export const InstalledAndroidView: React.FC<InstalledAndroidViewProps> = ({ onRe
         <div className="space-y-2">
           <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-xs font-bold tracking-wide uppercase">
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Installed App Mode</span>
+            <span>EduZoon Installed App</span>
           </div>
 
           <h1 className="text-4xl sm:text-5xl font-extrabold text-white tracking-tight font-['Space_Grotesk'] leading-tight">
-            Hello Android
+            Hello Android!
           </h1>
 
           <p className="text-xs sm:text-sm text-slate-400 font-medium max-w-xs mx-auto">
-            EduZoon is running in native standalone installed view.
+            Welcome to EduZoon on your Android device. Launch the full platform below.
           </p>
         </div>
 
-        {/* Optional Return to Web App Toggle for Browser Testing */}
+        {/* Enter App Action */}
         {onReturnToWeb && (
-          <div className="pt-4">
+          <div className="pt-2 w-full space-y-3">
             <button
               onClick={onReturnToWeb}
-              className="px-4 py-2 bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-slate-200 text-xs font-bold rounded-xl transition-all flex items-center gap-2 shadow-lg"
+              className="w-full py-3.5 px-6 rounded-2xl bg-gradient-to-r from-emerald-500 via-teal-500 to-blue-600 hover:from-emerald-400 hover:to-blue-500 text-slate-950 font-extrabold text-sm shadow-xl shadow-emerald-500/20 active:scale-95 transition-all flex items-center justify-center gap-2"
             >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Switch to Full Web Version</span>
+              <span>Enter EduZoon App</span>
+              <Sparkles className="w-4 h-4 fill-slate-950" />
             </button>
           </div>
         )}
