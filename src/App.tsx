@@ -21,19 +21,21 @@ export default function App() {
   const [darkMode, setDarkMode] = useState(true);
   const [user, setUser] = useState<UserProfile | null>(getCurrentUser());
 
-  // Installed App Mode (shows 'Hello Android' when standalone/installed or requested)
-  const [isInstalledView, setIsInstalledView] = useState<boolean>(() => {
+  // Detect if running inside Android WebView or PWA Standalone
+  const [isAndroidApp, setIsAndroidApp] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
-      const isStandalone =
+      return (
+        window.location.search.includes('android=true') ||
         window.matchMedia('(display-mode: standalone)').matches ||
         (window.navigator as any).standalone === true ||
-        window.location.search.includes('installed=true') ||
-        window.location.search.includes('android=true');
-      const stored = localStorage.getItem('eduzoon_force_installed_view');
-      return isStandalone || stored === 'true';
+        navigator.userAgent.toLowerCase().includes('android')
+      );
     }
     return false;
   });
+
+  const [showInstalledModal, setShowInstalledModal] = useState(false);
+  const [showAndroidBanner, setShowAndroidBanner] = useState(true);
 
   // Modals
   const [selectedToolId, setSelectedToolId] = useState<string | null>(null);
@@ -74,18 +76,6 @@ export default function App() {
     setIsProfileOpen(false);
   };
 
-  // If launched in installed mode or forced installed view
-  if (isInstalledView) {
-    return (
-      <InstalledAndroidView
-        onReturnToWeb={() => {
-          localStorage.setItem('eduzoon_force_installed_view', 'false');
-          setIsInstalledView(false);
-        }}
-      />
-    );
-  }
-
   // If not logged in, show mandatory login screen overlay
   if (!user) {
     return (
@@ -102,6 +92,30 @@ export default function App() {
 
   return (
     <div className={`min-h-screen ${darkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'} font-['Hind_Siliguri',sans-serif]`}>
+      {/* Hello Android Top Welcome Banner */}
+      {isAndroidApp && showAndroidBanner && (
+        <div className="bg-gradient-to-r from-emerald-600 via-teal-600 to-blue-600 text-white px-4 py-2 text-xs font-bold flex items-center justify-between shadow-md">
+          <div className="flex items-center gap-2">
+            <span className="w-2 h-2 rounded-full bg-emerald-300 animate-ping"></span>
+            <span>📱 Hello Android! EduZoon অ্যাপ ইনস্টলড মোডে চালু আছে</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowInstalledModal(true)}
+              className="px-2 py-0.5 rounded-lg bg-black/30 hover:bg-black/50 text-[10px] font-extrabold uppercase tracking-wider"
+            >
+              ভিউ ইনফো
+            </button>
+            <button
+              onClick={() => setShowAndroidBanner(false)}
+              className="p-1 rounded-md hover:bg-black/20 text-white/80 hover:text-white"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* App Header */}
       <Header
         user={user}
@@ -271,6 +285,20 @@ export default function App() {
                 <span>লগআউট</span>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {/* Installed App Modal Overlay */}
+      {showInstalledModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in">
+          <div className="relative w-full max-w-md">
+            <button
+              onClick={() => setShowInstalledModal(false)}
+              className="absolute top-3 right-3 z-20 p-2 rounded-full bg-slate-900 text-slate-400 hover:text-white"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <InstalledAndroidView onReturnToWeb={() => setShowInstalledModal(false)} />
           </div>
         </div>
       )}
